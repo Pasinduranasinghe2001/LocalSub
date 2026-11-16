@@ -2,9 +2,10 @@
 
 Add any video, audio, or `.srt` / `.vtt` file → LocalSub **auto-detects the spoken language**, transcribes in parallel, and generates natural subtitles in **Sinhala, English, Tamil, Hindi, and 15+ more languages** using **your own API keys** (Groq, Google Gemini, OpenAI, OpenRouter, DeepSeek, or custom OpenAI-compatible server).
 
-## Download / Install
-- **Windows Installer:** [`installer/LocalSub-Setup.exe`](installer/LocalSub-Setup.exe) (Start Menu + optional Desktop shortcut + Uninstaller)
-- **Or run from source / build yourself:** see below.
+## Download / Install (Windows 10 / 11 – no Python or extra software needed)
+- **Windows Installer (recommended):** [Download `LocalSub-Setup.exe`](https://github.com/Pasinduranasinghe2001/LocalSub/releases/latest/download/LocalSub-Setup.exe) (Start Menu + optional Desktop shortcut + Uninstaller)
+- **Portable `.exe` (no install):** [Download `LocalSub.exe`](https://github.com/Pasinduranasinghe2001/LocalSub/releases/latest/download/LocalSub.exe)
+- **All releases:** [Releases page](https://github.com/Pasinduranasinghe2001/LocalSub/releases)
 
 ## Key Features
 - **Any video duration (30 min, 1 hr, 2 hr, 3 hr+):** extracts audio locally via bundled FFmpeg (`PyAV`) into small MP3 chunks and stitches timestamps continuously.
