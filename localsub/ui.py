@@ -142,8 +142,7 @@ class GeneratePage(ctk.CTkFrame):
             fg_color=B_RED, hover_color=B_RED_H, state="disabled", command=self.app.stop.set,
         )
         self.stop_btn.grid(row=0, column=1, padx=8)
-        self.provider_lbl = ctk.CTkLabel(ccard, text="", anchor="e")
-        self.provider_lbl.grid(row=0, column=2, sticky="e", padx=8)
+        ctk.CTkFrame(ccard, fg_color="transparent", height=1).grid(row=0, column=2, sticky="ew")
         self.save_part_btn = ctk.CTkButton(
             ccard, text="💾 Save partial", width=118, height=36,
             fg_color=B_VIOLET, hover_color=B_VIOLET_H, state="disabled", command=self.save_partial,
@@ -165,8 +164,10 @@ class GeneratePage(ctk.CTkFrame):
         prow.grid_columnconfigure(0, weight=1)
         self.status = ctk.CTkLabel(prow, text="Ready", anchor="w", font=ctk.CTkFont(weight="bold"))
         self.status.grid(row=0, column=0, sticky="w")
+        self.provider_lbl = ctk.CTkLabel(prow, text="", anchor="e")
+        self.provider_lbl.grid(row=0, column=1, sticky="e")
         self.pb = ctk.CTkProgressBar(prow, progress_color=B_GREEN[1], height=10)
-        self.pb.grid(row=1, column=0, sticky="ew", pady=4)
+        self.pb.grid(row=1, column=0, columnspan=2, sticky="ew", pady=4)
         self.pb.set(0)
 
         self.logbox = ctk.CTkTextbox(

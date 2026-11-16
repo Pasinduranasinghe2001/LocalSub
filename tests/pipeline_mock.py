@@ -40,6 +40,7 @@ assert "gsk_plain_key_999" not in raw_disk and "dpapi:" in raw_disk
 
 # 3. Mock API: part 0 falsely says 'latin' with English text, part 1+ says 'english'; chat hits 404 once then recovers
 cache.CACHE_DIR = tempfile.mkdtemp()
+cache.SESSION_PATH = os.path.join(tmp_cfg, "session.json")
 calls = []
 fallback_triggered = [False]
 
