@@ -59,6 +59,7 @@ class GeneratePage(ctk.CTkFrame):
         self.app = app
         self.files = []
         self.last_written = []
+        self.last_partial = None
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(5, weight=1)
 
@@ -143,15 +144,20 @@ class GeneratePage(ctk.CTkFrame):
         self.stop_btn.grid(row=0, column=1, padx=8)
         self.provider_lbl = ctk.CTkLabel(ccard, text="", anchor="e")
         self.provider_lbl.grid(row=0, column=2, sticky="e", padx=8)
+        self.save_part_btn = ctk.CTkButton(
+            ccard, text="💾 Save partial", width=118, height=36,
+            fg_color=B_VIOLET, hover_color=B_VIOLET_H, state="disabled", command=self.save_partial,
+        )
+        self.save_part_btn.grid(row=0, column=3, padx=(0, 6))
         self.open_srt_btn = ctk.CTkButton(
-            ccard, text="📄 Open SRT", width=110, height=36,
+            ccard, text="📄 Open SRT", width=105, height=36,
             fg_color=B_CYAN, hover_color=B_CYAN_H, state="disabled", command=self.open_last_srt,
         )
-        self.open_srt_btn.grid(row=0, column=3, padx=(0, 6))
+        self.open_srt_btn.grid(row=0, column=4, padx=(0, 6))
         ctk.CTkButton(
-            ccard, text="📂 Open folder", width=120, height=36,
+            ccard, text="📂 Open folder", width=115, height=36,
             fg_color=B_SLATE, hover_color=B_SLATE_H, command=self.open_output,
-        ).grid(row=0, column=4)
+        ).grid(row=0, column=5)
 
         # ---------- Progress + colored log
         prow = ctk.CTkFrame(self, fg_color="transparent")
@@ -175,6 +181,48 @@ class GeneratePage(ctk.CTkFrame):
         tb.tag_config("warn", foreground="#f59e0b")
         tb.tag_config("err", foreground="#f43f5e")
         self.refresh_provider_label()
+        self.restore_session()
+
+    def _add_path(self, p):
+        if not os.path.exists(p) or any(f["path"] == p for f in self.files):
+            return False
+        self.empty_lbl.grid_forget()
+        row = ctk.CTkFrame(self.flist, fg_color=C_CARD, border_width=1, border_color=C_BORDER, corner_radius=8)
+        row.grid(row=len(self.files) + 1, column=0, sticky="ew", pady=2, padx=2)
+        row.grid_columnconfigure(0, weight=1)
+        icon = "📝" if os.path.splitext(p)[1].lower() in pipeline.SUB_EXTS else "🎬"
+        ctk.CTkLabel(row, text=f"{icon}  {os.path.basename(p)}", anchor="w").grid(
+            row=0, column=0, sticky="w", padx=10, pady=4)
+        st = ctk.CTkLabel(row, text="Ready", text_color="#38bdf8", width=130)
+        st.grid(row=0, column=1)
+        item = {"path": p, "status": st, "row": row}
+        ctk.CTkButton(row, text="✕", width=28, fg_color="transparent", hover_color=B_RED_H,
+                      command=lambda it=item: self.remove(it)).grid(row=0, column=2, padx=4)
+        self.files.append(item)
+        return True
+
+    def save_session(self):
+        cache.save_session(
+            [f["path"] for f in self.files],
+            self.src.get(),
+            [n for n, v in self.tvars.items() if v.get()],
+            self.dual_var.get(),
+        )
+
+    def restore_session(self):
+        sess = cache.load_session()
+        if not sess:
+            return
+        if sess.get("source_lang") in (["Auto detect"] + list(languages.LANGUAGES)):
+            self.src.set(sess["source_lang"])
+        if "dual_subtitles" in sess:
+            self.dual_var.set(bool(sess["dual_subtitles"]))
+        if isinstance(sess.get("targets"), list):
+            tset = set(sess["targets"])
+            for n, v in self.tvars.items():
+                v.set(n in tset)
+        for p in sess.get("files", []):
+            self._add_path(p)
 
     def refresh_provider_label(self):
         s = self.app.settings
@@ -193,22 +241,10 @@ class GeneratePage(ctk.CTkFrame):
     def add_files(self):
         added = False
         for p in filedialog.askopenfilenames(title="Choose videos or subtitle files", filetypes=MEDIA_TYPES):
-            if any(f["path"] == p for f in self.files):
-                continue
-            self.empty_lbl.grid_forget()
-            row = ctk.CTkFrame(self.flist, fg_color=C_CARD, border_width=1, border_color=C_BORDER, corner_radius=8)
-            row.grid(row=len(self.files) + 1, column=0, sticky="ew", pady=2, padx=2)
-            row.grid_columnconfigure(0, weight=1)
-            icon = "📝" if os.path.splitext(p)[1].lower() in pipeline.SUB_EXTS else "🎬"
-            ctk.CTkLabel(row, text=f"{icon}  {os.path.basename(p)}", anchor="w").grid(
-                row=0, column=0, sticky="w", padx=10, pady=4)
-            st = ctk.CTkLabel(row, text="Ready", text_color="#38bdf8", width=130)
-            st.grid(row=0, column=1)
-            item = {"path": p, "status": st, "row": row}
-            ctk.CTkButton(row, text="✕", width=28, fg_color="transparent", hover_color=B_RED_H,
-                          command=lambda it=item: self.remove(it)).grid(row=0, column=2, padx=4)
-            self.files.append(item)
-            added = True
+            if self._add_path(p):
+                added = True
+        if added:
+            self.save_session()
         if added and not self.app.busy:
             s = self.app.settings
             has_key = bool(cfgmod.provider_cfg(s, s["stt_provider"]).get("api_key")) or bool(
@@ -225,6 +261,7 @@ class GeneratePage(ctk.CTkFrame):
         self.files.remove(item)
         if not self.files:
             self.empty_lbl.grid(row=0, column=0, pady=34)
+        self.save_session()
 
     def clear_files(self):
         for it in list(self.files):
@@ -241,10 +278,22 @@ class GeneratePage(ctk.CTkFrame):
                 os.startfile(p)
                 return
 
+    def save_partial(self):
+        if not self.last_partial:
+            return
+        out = pipeline.export_partial(self.last_partial)
+        if not out:
+            return messagebox.showinfo(APP_NAME, "No completed subtitle lines to export yet.")
+        self.last_written.extend(out)
+        self.open_srt_btn.configure(state="normal")
+        for p in out:
+            self.log(f"Saved (partial): {p}")
+        messagebox.showinfo(APP_NAME, "Saved partial subtitles:\n\n" + "\n".join(out))
+
     def log(self, msg):
         tag = None
         m = msg.strip()
-        if m.startswith("━━━"):
+        if m.startswith("━━━") or m.startswith("💾"):
             tag = "head"
         elif m.startswith("Step "):
             tag = "step"
@@ -283,6 +332,7 @@ class GeneratePage(ctk.CTkFrame):
 
         s["dual_subtitles"] = bool(self.dual_var.get())
         src = None if self.src.get() == "Auto detect" else self.src.get()
+        self.save_session()
         for f in self.files:
             f["status"].configure(text="Queued", text_color=C_MUTED)
         self.app.run_job(self.files, targets, src)
@@ -708,12 +758,15 @@ class App(ctk.CTk):
         page = self.pages["generate"]
         page.set_busy(True)
         page.last_written.clear()
+        page.last_partial = None
         page.open_srt_btn.configure(state="disabled")
+        page.save_part_btn.configure(state="disabled")
         settings = dict(self.settings)
 
         def worker():
             ok = 0
             all_written = []
+            last_partial = None
             for n, item in enumerate(files, 1):
                 if self.stop.is_set():
                     break
@@ -721,24 +774,43 @@ class App(ctk.CTk):
                 self.q.put(("file", item, "Working…", "#f59e0b"))
                 self.q.put(("log", f"\n━━━ [{n}/{len(files)}] {name} ━━━"))
                 t0 = time.time()
+                pstate = {}
 
                 def prog(stage, frac, n=n):
                     self.q.put(("progress", f"[{n}/{len(files)}] {stage}…", frac))
+
+                def has_partial_progress(st):
+                    if st.get("segments"):
+                        return True
+                    return any(x is not None for x in (st.get("stt_results") or []))
+
                 try:
                     out = pipeline.process_file(item["path"], settings, targets, src,
-                                                lambda m: self.q.put(("log", m)), prog, self.stop)
+                                                lambda m: self.q.put(("log", m)), prog, self.stop,
+                                                partial_state=pstate)
                     all_written.extend(out)
                     self.q.put(("file", item, f"Done ✔ ({len(out)})", "#22c55e"))
                     self.q.put(("log", f"Finished in {time.time() - t0:.1f} s"))
                     ok += 1
                 except InterruptedError:
-                    self.q.put(("file", item, "Stopped", C_MUTED))
-                    self.q.put(("log", "Stopped by user."))
+                    if has_partial_progress(pstate):
+                        last_partial = pstate
+                        self.q.put(("file", item, "Paused (saved)", "#f59e0b"))
+                        self.q.put(("log", "💾 Stopped — completed parts/batches are saved. Click ▶ Generate Subtitles to resume, or 💾 Save partial."))
+                    else:
+                        self.q.put(("file", item, "Stopped", C_MUTED))
+                        self.q.put(("log", "Stopped by user."))
                     break
                 except Exception as e:
-                    self.q.put(("file", item, "Failed ✖", "#f43f5e"))
-                    self.q.put(("log", f"✖ Error: {e}"))
-            self.q.put(("done", ok, len(files), all_written))
+                    if has_partial_progress(pstate):
+                        last_partial = pstate
+                        self.q.put(("file", item, "Paused (saved)", "#f59e0b"))
+                        self.q.put(("log", f"✖ Error: {e}"))
+                        self.q.put(("log", "💾 Checkpoint saved! Click ▶ Generate Subtitles to resume from this break point (or click 💾 Save partial)."))
+                    else:
+                        self.q.put(("file", item, "Failed ✖", "#f43f5e"))
+                        self.q.put(("log", f"✖ Error: {e}"))
+            self.q.put(("done", ok, len(files), all_written, last_partial))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -759,8 +831,11 @@ class App(ctk.CTk):
                     self.busy = False
                     page.set_busy(False)
                     page.last_written = msg[3]
+                    page.last_partial = msg[4]
                     if msg[3]:
                         page.open_srt_btn.configure(state="normal")
+                    if msg[4]:
+                        page.save_part_btn.configure(state="normal")
                     page.status.configure(text=f"Finished: {msg[1]}/{msg[2]} file(s) completed")
                     page.pb.set(1 if msg[1] else 0)
         except queue.Empty:
@@ -773,6 +848,7 @@ class App(ctk.CTk):
     def on_close(self):
         if self.busy and not messagebox.askyesno(APP_NAME, "A job is running. Quit anyway?"):
             return
+        self.pages["generate"].save_session()
         self.stop.set()
         self.destroy()
 

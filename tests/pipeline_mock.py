@@ -120,4 +120,28 @@ out3 = pipeline.process_file(srt_in, s, ["Sinhala"], "English",
                              lambda m: (print(m), bk_logs.append(m)), lambda st, f: None, threading.Event())
 assert any("continuing remaining batches with backup Groq" in m for m in bk_logs), bk_logs
 assert any(p.endswith(".si.srt") for p in out3)
+
+# 7. Translation checkpoint resume + partial export
+pstate = {}
+prev_t = len(calls)
+cache.save_session([srt_in], "English", ["Sinhala"], True)
+assert cache.load_session()["files"] == [srt_in]
+
+# Re-run exact same translation -> should reuse cached translation batch (0 new chat calls)
+chat_count = [0]
+orig_chat = fake_chat
+def counted_chat(*a, **kw):
+    chat_count[0] += 1
+    return orig_chat(*a, **kw)
+api.chat = counted_chat
+s["translate_provider"] = "Groq"
+s["backup_translate_provider"] = "None"
+logs_res = []
+pipeline.process_file(srt_in, s, ["Sinhala"], "English",
+                      lambda m: (print(m), logs_res.append(m)), lambda st, f: None, threading.Event(),
+                      partial_state=pstate)
+assert chat_count[0] == 0, f"Expected 0 new API calls on cached batch, got {chat_count[0]}"
+assert any("Translation checkpoint:" in m for m in logs_res)
+part_files = pipeline.export_partial(pstate)
+assert part_files and any(".partial." in p for p in part_files)
 print("ALL PIPELINE TESTS OK")

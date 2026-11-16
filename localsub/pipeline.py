@@ -56,7 +56,51 @@ def _pick_language(chunk_langs, segments, source_lang):
     return first
 
 
-def process_file(path, settings, targets, source_lang, log, progress, stop):
+def export_partial(state):
+    """Write whatever transcription parts or translation batches finished before an interruption."""
+    if not state:
+        return []
+    out_dir = state["out_dir"]
+    base = state["base"]
+    fmt = state["fmt"]
+    max_chars = state["max_chars"]
+    written = []
+
+    segs = list(state.get("segments") or [])
+    if not segs and state.get("stt_results"):
+        for item in state["stt_results"]:
+            if item is not None:
+                segs.extend(item[1])
+    if not segs:
+        return []
+
+    detected = state.get("detected") or "Unknown"
+    targets = state.get("targets") or []
+    translated = state.get("translated") or {}
+    batch_size = state.get("batch_size") or BATCH
+
+    # Save partial original if Original was requested or no translation started yet
+    if "Original" in targets or not translated:
+        p = os.path.join(out_dir, f"{base}.partial.{languages.code(detected)}.{fmt}")
+        subtitles.write(p, segs, fmt, max_chars)
+        written.append(p)
+
+    for target, batches in translated.items():
+        partial_segs = []
+        for b_idx, chunk_out in enumerate(batches):
+            if chunk_out is None:
+                continue
+            start = b_idx * batch_size
+            for s, t in zip(segs[start:start + len(chunk_out)], chunk_out):
+                partial_segs.append(dict(s, text=t))
+        if partial_segs:
+            p = os.path.join(out_dir, f"{base}.partial.{languages.code(target)}.{fmt}")
+            subtitles.write(p, partial_segs, fmt, max_chars)
+            written.append(p)
+    return written
+
+
+def process_file(path, settings, targets, source_lang, log, progress, stop, partial_state=None):
     """
     Supports both video/audio files and existing .srt/.vtt subtitle files.
     Returns list of written subtitle paths.
@@ -72,6 +116,13 @@ def process_file(path, settings, targets, source_lang, log, progress, stop):
     out_dir = settings.get("output_dir") or os.path.dirname(path)
     os.makedirs(out_dir, exist_ok=True)
     base, ext = os.path.splitext(os.path.basename(path))
+
+    if partial_state is not None:
+        partial_state.update({
+            "out_dir": out_dir, "base": base, "fmt": fmt, "max_chars": max_chars,
+            "targets": list(targets), "segments": [], "stt_results": None,
+            "detected": None, "translated": {}, "batch_size": BATCH,
+        })
 
     segments, detected = [], None
 
@@ -110,8 +161,15 @@ def process_file(path, settings, targets, source_lang, log, progress, stop):
                 log(f"Step 2/3: Transcribing via {settings['stt_provider']} ({min(workers, total_parts)}x parallel)...")
                 explicit_code = languages.code(source_lang) if source_lang else None
                 results = [None] * total_parts
+                if partial_state is not None:
+                    partial_state["stt_results"] = results
                 done_count = 0
                 hint_code = explicit_code
+
+                if use_cache:
+                    cached_n = sum(1 for i in range(total_parts) if cache.load_chunk(ckey, i) is not None)
+                    if cached_n:
+                        log(f"💾 Checkpoint found: {cached_n}/{total_parts} audio part(s) already saved — resuming from break point...")
 
                 # If auto-detecting and >1 part, run part 1 first to detect language cleanly
                 start_idx = 0
@@ -140,16 +198,21 @@ def process_file(path, settings, targets, source_lang, log, progress, stop):
                             futs[pool.submit(
                                 _transcribe_one, i, cpath, offset, dur, stt, hint_code, "", ckey, use_cache, stop
                             )] = i
-                        for fut in as_completed(futs):
-                            if stop.is_set():
-                                for f in futs:
-                                    f.cancel()
-                                raise InterruptedError
-                            idx, rlang, rsegs, was_cached = fut.result()
-                            results[idx] = (rlang, rsegs)
-                            done_count += 1
-                            log(f"  Part {idx + 1}/{total_parts} done ({len(rsegs)} lines{' - cached' if was_cached else ''})")
-                            progress(f"Transcribing ({done_count}/{total_parts})", done_count / total_parts)
+                        try:
+                            for fut in as_completed(futs):
+                                if stop.is_set():
+                                    for f in futs:
+                                        f.cancel()
+                                    raise InterruptedError
+                                idx, rlang, rsegs, was_cached = fut.result()
+                                results[idx] = (rlang, rsegs)
+                                done_count += 1
+                                log(f"  Part {idx + 1}/{total_parts} done ({len(rsegs)} lines{' - cached' if was_cached else ''})")
+                                progress(f"Transcribing ({done_count}/{total_parts})", done_count / total_parts)
+                        except BaseException:
+                            for f in futs:
+                                f.cancel()
+                            raise
 
                 for _, rsegs in results:
                     segments.extend(rsegs)
@@ -162,6 +225,10 @@ def process_file(path, settings, targets, source_lang, log, progress, stop):
                     cache.save_transcript(ckey, detected, segments)
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
+
+    if partial_state is not None:
+        partial_state["segments"] = segments
+        partial_state["detected"] = detected
 
     # ---- Step 3: Output + Parallel Translation
     log("Creating subtitle files...")
@@ -196,11 +263,29 @@ def process_file(path, settings, targets, source_lang, log, progress, stop):
 
         jobs = []
         translated_by_target = {}
+        tkeys = {}
+        cached_batches = 0
+        total_batches = 0
         for target in translate_targets:
+            tkey = cache.trans_key(lines, target, style, batch_size) if use_cache else None
+            tkeys[target] = tkey
             n_batches = (len(lines) + batch_size - 1) // batch_size
+            total_batches += n_batches
             translated_by_target[target] = [None] * n_batches
             for b_idx, start in enumerate(range(0, len(lines), batch_size)):
-                jobs.append((target, b_idx, start))
+                hit = cache.load_trans_batch(tkey, b_idx) if tkey else None
+                if isinstance(hit, list) and len(hit) == len(lines[start:start + batch_size]):
+                    translated_by_target[target][b_idx] = hit
+                    cached_batches += 1
+                else:
+                    jobs.append((target, b_idx, start))
+
+        if partial_state is not None:
+            partial_state["translated"] = translated_by_target
+            partial_state["batch_size"] = batch_size
+
+        if cached_batches:
+            log(f"💾 Translation checkpoint: {cached_batches}/{total_batches} batch(es) already saved — resuming remaining {len(jobs)}...")
 
         state_lock = threading.Lock()
         groq_pace_lock = threading.Lock()
@@ -271,23 +356,31 @@ def process_file(path, settings, targets, source_lang, log, progress, stop):
                     cur_cfg = active_state["cfg"]
                     cur_name = active_state["name"]
                 out = call_provider(cur_cfg, cur_name, batch_lines, target, ctx, retries=6)
+            if use_cache and tkeys.get(target):
+                cache.save_trans_batch(tkeys[target], b_idx, out)
             return target, b_idx, out
 
-        backup_note = f" (backup: {backup_name})" if has_backup else ""
-        log(f"Translating {len(lines)} lines via {primary_name}{backup_note} across {len(translate_targets)} language(s) "
-            f"({len(jobs)} batches, {min(tr_workers, len(jobs))}x)...")
-        done_jobs = 0
-        with ThreadPoolExecutor(max_workers=min(tr_workers, len(jobs))) as pool:
-            futs = [pool.submit(run_batch, t, bi, st) for t, bi, st in jobs]
-            for fut in as_completed(futs):
-                if stop.is_set():
+        if jobs:
+            backup_note = f" (backup: {backup_name})" if has_backup else ""
+            log(f"Translating {len(lines)} lines via {primary_name}{backup_note} across {len(translate_targets)} language(s) "
+                f"({len(jobs)} remaining batches, {min(tr_workers, len(jobs))}x)...")
+            done_jobs = cached_batches
+            with ThreadPoolExecutor(max_workers=min(tr_workers, len(jobs))) as pool:
+                futs = [pool.submit(run_batch, t, bi, st) for t, bi, st in jobs]
+                try:
+                    for fut in as_completed(futs):
+                        if stop.is_set():
+                            for f in futs:
+                                f.cancel()
+                            raise InterruptedError
+                        target, b_idx, out = fut.result()
+                        translated_by_target[target][b_idx] = out
+                        done_jobs += 1
+                        progress(f"Translating ({done_jobs}/{total_batches} batches)", done_jobs / total_batches)
+                except BaseException:
                     for f in futs:
                         f.cancel()
-                    raise InterruptedError
-                target, b_idx, out = fut.result()
-                translated_by_target[target][b_idx] = out
-                done_jobs += 1
-                progress(f"Translating ({done_jobs}/{len(jobs)} batches)", done_jobs / len(jobs))
+                    raise
 
         for target in translate_targets:
             merged_texts = []

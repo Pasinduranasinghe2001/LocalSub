@@ -4,12 +4,13 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from localsub import settings as cfgmod
+from localsub import cache, settings as cfgmod
 from localsub import ui
 
 tmp = tempfile.mkdtemp()
 cfgmod.CONFIG_DIR = tmp
 cfgmod.CONFIG_PATH = os.path.join(tmp, "settings.json")
+cache.SESSION_PATH = os.path.join(tmp, "session.json")
 
 app = ui.App()
 app.update()

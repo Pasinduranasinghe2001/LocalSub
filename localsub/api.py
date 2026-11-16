@@ -14,8 +14,44 @@ from . import security
 
 _IPV4_LOCK = threading.Lock()
 _FORCE_IPV4 = False
+_ORIG_GETADDRINFO = socket.getaddrinfo
+_DNS_LOCK = threading.Lock()
+_DNS_CACHE = {}  # host -> (expires_monotonic, [ip, ...])
 _SKIP_LLM = ("whisper", "transcribe", "tts", "orpheus", "guard", "embed", "moderation", "dall-e", "sora", "audio")
 _PREF_LLM = ("qwen/qwen3.8", "qwen", "gpt-4o-mini", "gemini-2.5-flash", "gemini", "deepseek-chat", "gpt-oss", "llama")
+
+
+def _doh_resolve(host):
+    now = time.monotonic()
+    with _DNS_LOCK:
+        hit = _DNS_CACHE.get(host)
+        if hit and hit[0] > now:
+            return hit[1]
+    try:
+        r = requests.get(f"https://8.8.8.8/resolve?name={host}&type=A", timeout=5, verify=True)
+        ips = [a["data"] for a in r.json().get("Answer", []) if a.get("type") == 1 and a.get("data")]
+        if ips:
+            with _DNS_LOCK:
+                _DNS_CACHE[host] = (now + 300.0, ips)
+            return ips
+    except Exception:
+        pass
+    return []
+
+
+def _resilient_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    try:
+        return _ORIG_GETADDRINFO(host, port, family, type, proto, flags)
+    except socket.gaierror:
+        if isinstance(host, str) and host not in ("8.8.8.8", "localhost") and not host.replace(".", "").isdigit():
+            ips = _doh_resolve(host)
+            if ips:
+                p = int(port or 0)
+                return [(socket.AF_INET, type or socket.SOCK_STREAM, proto or socket.IPPROTO_TCP, "", (ip, p)) for ip in ips]
+        raise
+
+
+socket.getaddrinfo = _resilient_getaddrinfo
 
 
 class ApiError(Exception):
