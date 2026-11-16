@@ -238,11 +238,9 @@ def translate_lines(cfg, lines, target, source=None, context="", max_tokens=None
         )
         if target.strip().lower() == "sinhala":
             tone += (
-                " For Sinhala: write in natural everyday spoken Sri Lankan Sinhala (සරල කටවහර) "
-                "like popular Sri Lankan movie subtitles. Avoid stiff literary grammar (such as "
-                "කළේය, පැවසීය, ඔබතුමා, එම) and avoid heavy/rare Sanskritized words when a simple "
-                "spoken word fits the scene better (for example, use natural words like මරනවා / "
-                "ගහනවා / පහර දෙනවා / කැඩිලා / විනාශ වුණා / ඔයා / අපි / එයාලා / ඒක, never ඒවා for people)."
+                " For Sinhala: write natural, everyday spoken Sri Lankan movie subtitles (සරල කටවහර) "
+                "instead of stiff textbook/news language, while keeping exact meaning and accurate "
+                "pronouns (e.g. ඔහු, ඇය, ඔවුන්, ඔයා, අපි)."
             )
     else:
         tone = "Use clear, accurate, standard written phrasing appropriate for documentaries or lectures."
